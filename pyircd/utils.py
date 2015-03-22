@@ -1,42 +1,18 @@
 
+from collections import namedtuple
 import unicodedata
+import re
 from . import replies, exceptions
 
-p = """
-Taken from: http://www.fileformat.info/info/unicode/category/index.htm
-[Cc]	Other, Control
-[Cf]	Other, Format
-[Cn]	Other, Not Assigned (no characters in the file have this property)
-[Co]	Other, Private Use
-[Cs]	Other, Surrogate
-[LC]	Letter, Cased
-[Ll]	Letter, Lowercase
-[Lm]	Letter, Modifier
-[Lo]	Letter, Other
-[Lt]	Letter, Titlecase
-[Lu]	Letter, Uppercase
-[Mc]	Mark, Spacing Combining
-[Me]	Mark, Enclosing
-[Mn]	Mark, Nonspacing
-[Nd]	Number, Decimal Digit
-[Nl]	Number, Letter
-[No]	Number, Other
-[Pc]	Punctuation, Connector
-[Pd]	Punctuation, Dash
-[Pe]	Punctuation, Close
-[Pf]	Punctuation, Final quote (may behave like Ps or Pe depending on usage)
-[Pi]	Punctuation, Initial quote (may behave like Ps or Pe depending on usage)
-[Po]	Punctuation, Other
-[Ps]	Punctuation, Open
-[Sc]	Symbol, Currency
-[Sk]	Symbol, Modifier
-[Sm]	Symbol, Math
-[So]	Symbol, Other
-[Zl]	Separator, Line
-[Zp]	Separator, Paragraph
-[Zs]	Separator, Space
-"""
+Prefix = namedtuple('prefix', 'nick user host')
+prefix_pattern = re.compile(
+    r'^(?P<nick>[^!@]+)'
+    r'(?:!(?P<user>[^@]+))?'
+    r'(?:@(?P<host>[^@]+))?$'
+)
 
+
+# Taken from: http://www.fileformat.info/info/unicode/category/index.htm
 CATEGORY_NAMES = {
     'Lu': 'Letter, Uppercase',
     'Mc': 'Mark, Spacing Combining',
@@ -104,43 +80,59 @@ def check_nickname(nickname):
     if nickname.startswith(CHANNEL_INDICATORS):
         raise exceptions.IrcError(
             replies.ERR_ERRONEUSNICKNAME,
-            'Nickname starts with a channel indicator.')
+            [nickname, 'Nickname starts with a channel indicator.'])
     try:
         return check_for_categories(
             nickname, ALLOWED_CATEGORIES_NICKNAME)
     except ValueError as exc:
         raise exceptions.IrcError(
             replies.ERR_ERRONEUSNICKNAME,
-            str(exc))
+            [nickname, str(exc)])
 
 
 def check_channelname(channelname):
     if not channelname.startswith(CHANNEL_INDICATORS):
         raise exceptions.IrcError(
             replies.ERR_NOSUCHCHANNEL,
-            'Channelname does not start with a channel indicator.')
+            [channelname,
+             'Channelname does not start with a channel indicator.'])
     try:
         return check_for_categories(
             channelname[1:], ALLOWED_CATEGORIES_CHANNELNAME)
     except ValueError as exc:
         raise exceptions.IrcError(
             replies.ERR_NOSUCHCHANNEL,
-            str(exc))
+            [channelname, str(exc)])
+
+
+def normalize_name(nick_or_channel):
+    return unicodedata.normalize('NFC', nick_or_channel)
+
+
+def split_prefix(prefix):
+    if prefix is None:
+        return Prefix(None, None, None)
+    match = prefix_pattern.match(prefix)
+    if match is None:
+        raise exceptions.IrcError(
+            replies.ERR_BADMASK,
+            [prefix, 'Invalid prefix'])
+    return Prefix(*match.groups())
 
 
 def parse_line(line):
     """Parse line into a 3-tuple containing:
 
-    (prefix, command, parameters)
-    prefix might be None, and parameters the empty list.
+    (prefix_mask, command, parameters)
+    prefix_mask might be None, and parameters the empty list.
     """
-    prefix = None
+    prefix_mask = None
     if line[0:1] == ':':
         if ' ' in line:
-            prefix, line = line.split(None, 1)
+            prefix_mask, line = line.split(None, 1)
         else:
-            prefix, line = line, ''
-        prefix = prefix[1:]
+            prefix_mask, line = line, ''
+        prefix_mask = prefix_mask[1:]
     if ' ' in line:
         command, line = line.split(None, 1)
     else:
@@ -153,4 +145,29 @@ def parse_line(line):
     else:
         params = line.split()
 
-    return prefix, command.upper(), params
+    return Message(prefix_mask, command.upper(), params)
+
+
+class Message:
+    def __init__(self, prefix_mask, command, params):
+        self.mask = prefix_mask
+        self.prefix = split_prefix(prefix_mask)
+        self.command = command
+        self.params = params
+
+    def __repr__(self):
+        if self.command == 'PRIVMSG':
+            return '[MSG] <{}@{}> {}'.format(
+                self.prefix.nick, *self.params)
+        elif self.command == 'NOTICE':
+            return '[NOTICE] <{}@{}> {}'.format(
+                self.prefix.nick, *self.params)
+        else:
+            if self.mask is None:
+                return '[*] {}: {}'.format(
+                    self.command, self.params
+                )
+            else:
+                return '[*] {}: {} {}'.format(
+                    self.command, self.prefix, self.params
+                )

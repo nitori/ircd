@@ -1,9 +1,9 @@
 
 
 class IrcError(Exception):
-    def __init__(self, number, message=None):
+    def __init__(self, number, params=None):
         self.number = number
-        self.message = message
+        self.params = params
 
     def __str__(self):
-        return self.message
+        return ' '.join(self.params)

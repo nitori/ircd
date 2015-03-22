@@ -10,6 +10,7 @@ EVENT_MESSAGE = 3
 
 class Server:
     name = 'irc.example.org'
+    version = 'pyircd-0.1'
 
     def __init__(self, port=6667, host='0.0.0.0', *,
                  queue=None, loop=None, encoding='utf-8'):
@@ -38,14 +39,17 @@ class Server:
             buflist[-1] = ':' + buflist[-1]
         self.send_line(writer, ' '.join(buflist))
 
-    def send_error(self, writer, number, message):
-        self.send(writer, number, prefix=self.name, params=[message])
+    def send_error(self, writer, number, params):
+        self.send(writer, number, prefix=self.name, params=params)
 
     @asyncio.coroutine
     def protocol_handler(self, reader, clnt):
         buf = b''
         while True:
-            data = yield from reader.read(4 << 10)
+            try:
+                data = yield from reader.read(4 << 10)
+            except ConnectionResetError:
+                break
             if not data:
                 break
             data = data.replace(b'\r', b'\n')
@@ -58,7 +62,10 @@ class Server:
                         line = line.decode(self.encoding)
                     except UnicodeDecodeError as exc:
                         clnt.send_error(
-                            replies.ERR_INCORRECTENCODING)
+                            replies.ERR_INCORRECTENCODING,
+                            ['Incorrect encoding. You must use {}.'
+                             .format(self.encoding)]
+                        )
                     else:
                         parsed_line = utils.parse_line(line)
                         yield from self.queue.put(
